@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
+import { parse as parseHtml, HTMLElement, TextNode } from "node-html-parser"
 import {
   Document,
   Packer,
@@ -11,104 +12,270 @@ import {
   AlignmentType,
 } from "docx"
 
-function htmlToDocxParagraphs(html: string): Paragraph[] {
-  const paragraphs: Paragraph[] = []
-
-  // Strip HTML tags and convert to paragraphs
-  // Split by common block-level tags
-  const blocks = html
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/?(div|p|section)[^>]*>/gi, "\n")
-    .replace(/<h1[^>]*>(.*?)<\/h1>/gi, "%%H1%%$1%%END%%")
-    .replace(/<h2[^>]*>(.*?)<\/h2>/gi, "%%H2%%$1%%END%%")
-    .replace(/<h3[^>]*>(.*?)<\/h3>/gi, "%%H3%%$1%%END%%")
-    .replace(/<li[^>]*>(.*?)<\/li>/gi, "%%LI%%$1%%END%%")
-    .replace(/<strong[^>]*>(.*?)<\/strong>/gi, "%%BOLD%%$1%%ENDBOLD%%")
-    .replace(/<em[^>]*>(.*?)<\/em>/gi, "%%ITALIC%%$1%%ENDITALIC%%")
-    .replace(/<[^>]+>/g, "")
+function decodeEntities(text: string): string {
+  return text
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&nbsp;/g, " ")
     .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&rsquo;/g, "\u2019")
+    .replace(/&lsquo;/g, "\u2018")
+    .replace(/&rdquo;/g, "\u201D")
+    .replace(/&ldquo;/g, "\u201C")
+    .replace(/&mdash;/g, "\u2014")
+    .replace(/&ndash;/g, "\u2013")
+    .replace(/&hellip;/g, "\u2026")
+}
 
-  const lines = blocks.split("\n").filter((line) => line.trim())
+interface InlineRun {
+  text: string
+  bold: boolean
+  italic: boolean
+}
 
-  for (const line of lines) {
-    const trimmed = line.trim()
-    if (!trimmed) continue
+function extractInlineRuns(
+  node: HTMLElement | TextNode,
+  bold = false,
+  italic = false
+): InlineRun[] {
+  if (node instanceof TextNode) {
+    const text = decodeEntities(node.rawText)
+    if (!text.trim()) return []
+    return [{ text, bold, italic }]
+  }
 
-    if (trimmed.startsWith("%%H1%%")) {
-      const text = trimmed.replace("%%H1%%", "").replace("%%END%%", "").trim()
-      paragraphs.push(
-        new Paragraph({
-          heading: HeadingLevel.HEADING_1,
-          alignment: AlignmentType.CENTER,
-          children: [new TextRun({ text, bold: true, size: 32 })],
-        })
-      )
-    } else if (trimmed.startsWith("%%H2%%")) {
-      const text = trimmed.replace("%%H2%%", "").replace("%%END%%", "").trim()
-      paragraphs.push(
-        new Paragraph({
-          heading: HeadingLevel.HEADING_2,
-          children: [new TextRun({ text, bold: true, size: 28 })],
-        })
-      )
-    } else if (trimmed.startsWith("%%H3%%")) {
-      const text = trimmed.replace("%%H3%%", "").replace("%%END%%", "").trim()
-      paragraphs.push(
-        new Paragraph({
-          heading: HeadingLevel.HEADING_3,
-          children: [new TextRun({ text, bold: true, size: 24 })],
-        })
-      )
-    } else if (trimmed.startsWith("%%LI%%")) {
-      const text = trimmed.replace("%%LI%%", "").replace("%%END%%", "").trim()
-      const cleanText = text
-        .replace(/%%BOLD%%/g, "")
-        .replace(/%%ENDBOLD%%/g, "")
-        .replace(/%%ITALIC%%/g, "")
-        .replace(/%%ENDITALIC%%/g, "")
-      paragraphs.push(
-        new Paragraph({
-          bullet: { level: 0 },
-          children: [new TextRun({ text: cleanText })],
-        })
-      )
-    } else {
-      // Regular paragraph - handle bold/italic markers
-      const children: TextRun[] = []
-      const parts = trimmed.split(/(%%BOLD%%|%%ENDBOLD%%|%%ITALIC%%|%%ENDITALIC%%)/)
-      let isBold = false
-      let isItalic = false
+  const el = node as HTMLElement
+  const tag = el.tagName?.toLowerCase() || ""
 
-      for (const part of parts) {
-        if (part === "%%BOLD%%") {
-          isBold = true
-          continue
-        }
-        if (part === "%%ENDBOLD%%") {
-          isBold = false
-          continue
-        }
-        if (part === "%%ITALIC%%") {
-          isItalic = true
-          continue
-        }
-        if (part === "%%ENDITALIC%%") {
-          isItalic = false
-          continue
-        }
-        if (part.trim()) {
-          children.push(new TextRun({ text: part, bold: isBold, italics: isItalic }))
+  const nextBold = bold || tag === "strong" || tag === "b"
+  const nextItalic = italic || tag === "em" || tag === "i"
+
+  const runs: InlineRun[] = []
+  for (const child of el.childNodes) {
+    runs.push(...extractInlineRuns(child as HTMLElement | TextNode, nextBold, nextItalic))
+  }
+  return runs
+}
+
+function htmlToDocxParagraphs(html: string): Paragraph[] {
+  const root = parseHtml(html, { blockTextElements: {} })
+  const paragraphs: Paragraph[] = []
+
+  function processNode(node: HTMLElement | TextNode) {
+    if (node instanceof TextNode) {
+      const text = decodeEntities(node.rawText).trim()
+      if (text) {
+        paragraphs.push(
+          new Paragraph({
+            spacing: { after: 120 },
+            children: [new TextRun({ text, size: 22 })],
+          })
+        )
+      }
+      return
+    }
+
+    const el = node as HTMLElement
+    const tag = el.tagName?.toLowerCase() || ""
+
+    if (tag === "h1") {
+      const text = decodeEntities(el.textContent).trim()
+      if (text) {
+        paragraphs.push(
+          new Paragraph({
+            heading: HeadingLevel.HEADING_1,
+            spacing: { before: 240, after: 120 },
+            children: [new TextRun({ text, bold: true, size: 32 })],
+          })
+        )
+      }
+      return
+    }
+
+    if (tag === "h2") {
+      const text = decodeEntities(el.textContent).trim()
+      if (text) {
+        paragraphs.push(
+          new Paragraph({
+            heading: HeadingLevel.HEADING_2,
+            spacing: { before: 200, after: 100 },
+            children: [new TextRun({ text, bold: true, size: 28 })],
+          })
+        )
+      }
+      return
+    }
+
+    if (tag === "h3") {
+      const text = decodeEntities(el.textContent).trim()
+      if (text) {
+        paragraphs.push(
+          new Paragraph({
+            heading: HeadingLevel.HEADING_3,
+            spacing: { before: 160, after: 80 },
+            children: [new TextRun({ text, bold: true, size: 24 })],
+          })
+        )
+      }
+      return
+    }
+
+    if (tag === "p" || tag === "div") {
+      const runs = extractInlineRuns(el)
+      if (runs.length > 0) {
+        paragraphs.push(
+          new Paragraph({
+            spacing: { after: 120 },
+            children: runs.map(
+              (r) =>
+                new TextRun({
+                  text: r.text,
+                  bold: r.bold,
+                  italics: r.italic,
+                  size: 22,
+                })
+            ),
+          })
+        )
+      }
+      return
+    }
+
+    if (tag === "ul" || tag === "ol") {
+      for (const child of el.childNodes) {
+        if (child instanceof HTMLElement && child.tagName?.toLowerCase() === "li") {
+          processLi(child)
         }
       }
+      return
+    }
 
-      if (children.length > 0) {
-        paragraphs.push(new Paragraph({ children }))
+    if (tag === "li") {
+      processLi(el)
+      return
+    }
+
+    if (tag === "table") {
+      // Render tables as simple text rows
+      const rows = el.querySelectorAll("tr")
+      for (const row of rows) {
+        const cells = row.querySelectorAll("td, th")
+        const cellTexts = cells.map((c) => decodeEntities(c.textContent).trim())
+        const isHeader = row.querySelector("th") !== null
+        if (cellTexts.some((t) => t)) {
+          paragraphs.push(
+            new Paragraph({
+              spacing: { after: 60 },
+              children: [
+                new TextRun({
+                  text: cellTexts.join("    |    "),
+                  bold: isHeader,
+                  size: 22,
+                }),
+              ],
+            })
+          )
+        }
+      }
+      return
+    }
+
+    if (tag === "br") {
+      paragraphs.push(new Paragraph({ children: [] }))
+      return
+    }
+
+    // For any other element, recurse into children
+    for (const child of el.childNodes) {
+      processNode(child as HTMLElement | TextNode)
+    }
+  }
+
+  function processLi(li: HTMLElement) {
+    // Check if the li contains block elements (nested lists, headings, etc.)
+    const blockTags = ["ul", "ol", "h1", "h2", "h3", "h4", "p", "div", "table"]
+    const hasBlocks = blockTags.some((t) => li.querySelector(t) !== null)
+
+    if (hasBlocks) {
+      // Process inline content first, then block children
+      const inlineText: InlineRun[] = []
+      for (const child of li.childNodes) {
+        if (child instanceof TextNode) {
+          const runs = extractInlineRuns(child)
+          inlineText.push(...runs)
+        } else if (child instanceof HTMLElement) {
+          const childTag = child.tagName?.toLowerCase() || ""
+          if (blockTags.includes(childTag)) {
+            // Flush inline text as a bullet point first
+            if (inlineText.length > 0 && inlineText.some((r) => r.text.trim())) {
+              paragraphs.push(
+                new Paragraph({
+                  bullet: { level: 0 },
+                  spacing: { after: 60 },
+                  children: inlineText.map(
+                    (r) =>
+                      new TextRun({
+                        text: r.text,
+                        bold: r.bold,
+                        italics: r.italic,
+                        size: 22,
+                      })
+                  ),
+                })
+              )
+              inlineText.length = 0
+            }
+            processNode(child)
+          } else {
+            inlineText.push(...extractInlineRuns(child))
+          }
+        }
+      }
+      // Flush remaining inline text
+      if (inlineText.length > 0 && inlineText.some((r) => r.text.trim())) {
+        paragraphs.push(
+          new Paragraph({
+            bullet: { level: 0 },
+            spacing: { after: 60 },
+            children: inlineText.map(
+              (r) =>
+                new TextRun({
+                  text: r.text,
+                  bold: r.bold,
+                  italics: r.italic,
+                  size: 22,
+                })
+            ),
+          })
+        )
+      }
+    } else {
+      // Simple li - extract all inline runs
+      const runs = extractInlineRuns(li)
+      if (runs.length > 0) {
+        paragraphs.push(
+          new Paragraph({
+            bullet: { level: 0 },
+            spacing: { after: 60 },
+            children: runs.map(
+              (r) =>
+                new TextRun({
+                  text: r.text,
+                  bold: r.bold,
+                  italics: r.italic,
+                  size: 22,
+                })
+            ),
+          })
+        )
       }
     }
+  }
+
+  for (const child of root.childNodes) {
+    processNode(child as HTMLElement | TextNode)
   }
 
   return paragraphs
@@ -147,61 +314,80 @@ export async function POST(
     }
 
     if (format === "docx") {
-      // Build Word document from generatedJson sections
-      let sections: Paragraph[] = []
+      let docParagraphs: Paragraph[] = []
 
       if (proposal.generatedJson) {
         try {
           const data = JSON.parse(proposal.generatedJson)
 
           // Title
-          sections.push(
+          docParagraphs.push(
             new Paragraph({
               heading: HeadingLevel.TITLE,
               alignment: AlignmentType.CENTER,
-              spacing: { after: 400 },
+              spacing: { after: 200 },
               children: [
-                new TextRun({ text: data.title || "Proposal", bold: true, size: 40 }),
+                new TextRun({
+                  text: data.title || "Proposal",
+                  bold: true,
+                  size: 40,
+                }),
               ],
             })
           )
 
+          // Subtitle with customer name
+          if (proposal.customerName) {
+            docParagraphs.push(
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                spacing: { after: 400 },
+                children: [
+                  new TextRun({
+                    text: `Prepared for ${proposal.customerName}`,
+                    size: 24,
+                    color: "666666",
+                  }),
+                ],
+              })
+            )
+          }
+
           // Add each section
           if (data.sections && Array.isArray(data.sections)) {
             for (const section of data.sections) {
-              // Section heading
-              sections.push(
-                new Paragraph({
-                  heading: HeadingLevel.HEADING_1,
-                  spacing: { before: 400, after: 200 },
-                  children: [
-                    new TextRun({
-                      text: section.heading,
-                      bold: true,
-                      size: 28,
-                    }),
-                  ],
-                })
-              )
+              if (section.heading) {
+                docParagraphs.push(
+                  new Paragraph({
+                    heading: HeadingLevel.HEADING_1,
+                    spacing: { before: 400, after: 200 },
+                    children: [
+                      new TextRun({
+                        text: section.heading,
+                        bold: true,
+                        size: 28,
+                      }),
+                    ],
+                  })
+                )
+              }
 
-              // Section content
               if (section.content) {
                 const contentParagraphs = htmlToDocxParagraphs(section.content)
-                sections.push(...contentParagraphs)
+                docParagraphs.push(...contentParagraphs)
               }
             }
           }
         } catch {
-          // Fallback: use generatedHtml if JSON parsing fails
           if (proposal.generatedHtml) {
-            sections = htmlToDocxParagraphs(proposal.generatedHtml)
+            docParagraphs = htmlToDocxParagraphs(proposal.generatedHtml)
           }
         }
       } else if (proposal.generatedHtml) {
-        sections = htmlToDocxParagraphs(proposal.generatedHtml)
+        docParagraphs = htmlToDocxParagraphs(proposal.generatedHtml)
       }
 
-      if (sections.length === 0) {
+      if (docParagraphs.length === 0) {
         return NextResponse.json(
           { error: "No proposal content to export" },
           { status: 400 }
@@ -211,13 +397,12 @@ export async function POST(
       const doc = new Document({
         sections: [
           {
-            children: sections,
+            children: docParagraphs,
           },
         ],
       })
 
       const buffer = await Packer.toBuffer(doc)
-
       const filename = `${proposal.customerName.replace(/[^a-zA-Z0-9]/g, "_")}_Proposal.docx`
 
       return new NextResponse(buffer as unknown as BodyInit, {
@@ -231,7 +416,6 @@ export async function POST(
     }
 
     if (format === "pdf") {
-      // Return HTML for client-side rendering and print
       return NextResponse.json({
         html: proposal.generatedHtml || "",
         json: proposal.generatedJson

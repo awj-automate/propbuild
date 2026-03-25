@@ -113,7 +113,7 @@ export default function ProposalDetailPage() {
       const pageHeight = doc.internal.pageSize.getHeight();
       const marginLeft = 56;
       const marginRight = 56;
-      const maxWidth = pageWidth - marginLeft - marginRight;
+      const contentWidth = pageWidth - marginLeft - marginRight;
       let y = 56;
 
       const checkPageBreak = (needed: number) => {
@@ -123,44 +123,189 @@ export default function ProposalDetailPage() {
         }
       };
 
-      const stripHtml = (html: string): string => {
-        return html
-          .replace(/<br\s*\/?>/gi, "\n")
-          .replace(/<\/?(p|div|section)[^>]*>/gi, "\n")
-          .replace(/<\/?(ul|ol)[^>]*>/gi, "\n")
-          .replace(/<li[^>]*>(.*?)<\/li>/gi, "  \u2022 $1\n")
-          .replace(/<h[1-6][^>]*>(.*?)<\/h[1-6]>/gi, "\n$1\n")
-          .replace(/<[^>]+>/g, "")
-          .replace(/&amp;/g, "&")
-          .replace(/&lt;/g, "<")
-          .replace(/&gt;/g, ">")
-          .replace(/&nbsp;/g, " ")
-          .replace(/&quot;/g, '"')
-          .replace(/&#39;/g, "'")
-          .replace(/\n{3,}/g, "\n\n")
-          .trim();
-      };
-
       const writeText = (
         text: string,
         fontSize: number,
-        options?: { bold?: boolean; color?: [number, number, number]; spacing?: number }
+        opts?: {
+          bold?: boolean;
+          italic?: boolean;
+          color?: [number, number, number];
+          indent?: number;
+          spacingAfter?: number;
+        }
       ) => {
-        const { bold, color, spacing } = options || {};
+        const { bold, italic, color, indent, spacingAfter } = opts || {};
         doc.setFontSize(fontSize);
-        doc.setFont("helvetica", bold ? "bold" : "normal");
+        const style = bold && italic ? "bolditalic" : bold ? "bold" : italic ? "italic" : "normal";
+        doc.setFont("helvetica", style);
         if (color) doc.setTextColor(...color);
         else doc.setTextColor(17, 24, 39);
 
-        const lines = doc.splitTextToSize(text, maxWidth) as string[];
+        const x = marginLeft + (indent || 0);
+        const width = contentWidth - (indent || 0);
+        const lines = doc.splitTextToSize(text, width) as string[];
         const lineHeight = fontSize * 1.4;
 
         for (const line of lines) {
           checkPageBreak(lineHeight);
-          doc.text(line, marginLeft, y);
+          doc.text(line, x, y);
           y += lineHeight;
         }
-        y += spacing ?? 4;
+        y += spacingAfter ?? 4;
+      };
+
+      // Use browser DOMParser for proper HTML parsing
+      const parser = new DOMParser();
+
+      const processHtmlContent = (html: string) => {
+        const parsed = parser.parseFromString(`<div>${html}</div>`, "text/html");
+        const root = parsed.body.firstElementChild!;
+
+        const processNode = (node: Node, isBold = false, isItalic = false) => {
+          if (node.nodeType === Node.TEXT_NODE) {
+            const text = (node.textContent || "").trim();
+            if (text) {
+              writeText(text, 10, { bold: isBold, italic: isItalic, spacingAfter: 4 });
+            }
+            return;
+          }
+
+          if (node.nodeType !== Node.ELEMENT_NODE) return;
+          const el = node as Element;
+          const tag = el.tagName.toLowerCase();
+
+          if (tag === "h1" || tag === "h2" || tag === "h3") {
+            const text = (el.textContent || "").trim();
+            if (!text) return;
+            const sizes: Record<string, number> = { h1: 16, h2: 14, h3: 12 };
+            checkPageBreak(30);
+            writeText(text, sizes[tag] || 12, { bold: true, spacingAfter: 6 });
+            return;
+          }
+
+          if (tag === "p" || tag === "div") {
+            const text = (el.textContent || "").trim();
+            if (!text) return;
+            // Walk children for inline formatting
+            processInlineChildren(el, isBold, isItalic);
+            y += 4;
+            return;
+          }
+
+          if (tag === "ul" || tag === "ol") {
+            for (const child of Array.from(el.children)) {
+              if (child.tagName.toLowerCase() === "li") {
+                processLiNode(child, isBold, isItalic);
+              }
+            }
+            return;
+          }
+
+          if (tag === "li") {
+            processLiNode(el, isBold, isItalic);
+            return;
+          }
+
+          if (tag === "table") {
+            for (const row of Array.from(el.querySelectorAll("tr"))) {
+              const cells = Array.from(row.querySelectorAll("td, th"));
+              const text = cells.map((c) => (c.textContent || "").trim()).join("    |    ");
+              const isHeader = row.querySelector("th") !== null;
+              if (text.trim()) {
+                writeText(text, 10, { bold: isHeader, spacingAfter: 3 });
+              }
+            }
+            y += 4;
+            return;
+          }
+
+          if (tag === "br") {
+            y += 8;
+            return;
+          }
+
+          // For strong/em/b/i, recurse with updated formatting
+          const nextBold = isBold || tag === "strong" || tag === "b";
+          const nextItalic = isItalic || tag === "em" || tag === "i";
+          for (const child of Array.from(el.childNodes)) {
+            processNode(child, nextBold, nextItalic);
+          }
+        };
+
+        const processInlineChildren = (el: Element, isBold: boolean, isItalic: boolean) => {
+          // Collect text with formatting from inline children
+          const text = (el.textContent || "").trim();
+          if (!text) return;
+
+          // Simple approach: check if element has bold/italic children
+          const hasBold = el.querySelector("strong, b") !== null;
+          const hasItalic = el.querySelector("em, i") !== null;
+
+          // If no inline formatting, write as plain text
+          if (!hasBold && !hasItalic) {
+            writeText(text, 10, { bold: isBold, italic: isItalic, spacingAfter: 4 });
+          } else {
+            // Walk through child nodes for mixed formatting
+            for (const child of Array.from(el.childNodes)) {
+              if (child.nodeType === Node.TEXT_NODE) {
+                const t = (child.textContent || "").trim();
+                if (t) writeText(t, 10, { bold: isBold, italic: isItalic, spacingAfter: 1 });
+              } else if (child.nodeType === Node.ELEMENT_NODE) {
+                const childEl = child as Element;
+                const childTag = childEl.tagName.toLowerCase();
+                const nextBold = isBold || childTag === "strong" || childTag === "b";
+                const nextItalic = isItalic || childTag === "em" || childTag === "i";
+                const t = (childEl.textContent || "").trim();
+                if (t) writeText(t, 10, { bold: nextBold, italic: nextItalic, spacingAfter: 1 });
+              }
+            }
+            y += 3;
+          }
+        };
+
+        const processLiNode = (li: Element, isBold: boolean, isItalic: boolean) => {
+          // Check for nested block elements
+          const hasBlocks = li.querySelector("ul, ol, h1, h2, h3, p, div, table") !== null;
+
+          if (hasBlocks) {
+            for (const child of Array.from(li.childNodes)) {
+              if (child.nodeType === Node.TEXT_NODE) {
+                const text = (child.textContent || "").trim();
+                if (text) {
+                  writeText(`\u2022  ${text}`, 10, { bold: isBold, italic: isItalic, indent: 14, spacingAfter: 3 });
+                }
+              } else if (child.nodeType === Node.ELEMENT_NODE) {
+                const childEl = child as Element;
+                const childTag = childEl.tagName.toLowerCase();
+                if (childTag === "ul" || childTag === "ol" || childTag === "h1" || childTag === "h2" || childTag === "h3" || childTag === "p" || childTag === "div" || childTag === "table") {
+                  processNode(child, isBold, isItalic);
+                } else {
+                  const nextBold = isBold || childTag === "strong" || childTag === "b";
+                  const nextItalic = isItalic || childTag === "em" || childTag === "i";
+                  const text = (childEl.textContent || "").trim();
+                  if (text) {
+                    writeText(`\u2022  ${text}`, 10, { bold: nextBold, italic: nextItalic, indent: 14, spacingAfter: 3 });
+                  }
+                }
+              }
+            }
+          } else {
+            const text = (li.textContent || "").trim();
+            if (text) {
+              const hasBoldChild = li.querySelector("strong, b") !== null;
+              writeText(`\u2022  ${text}`, 10, {
+                bold: isBold || hasBoldChild,
+                italic: isItalic,
+                indent: 14,
+                spacingAfter: 3,
+              });
+            }
+          }
+        };
+
+        for (const child of Array.from(root.childNodes)) {
+          processNode(child);
+        }
       };
 
       // Parse sections
@@ -174,11 +319,11 @@ export default function ProposalDetailPage() {
       }
 
       // Title
-      writeText(title, 22, { bold: true, color: [74, 124, 111], spacing: 20 });
+      writeText(title, 22, { bold: true, color: [74, 124, 111], spacingAfter: 8 });
 
-      // Customer info line
+      // Customer info
       const infoLine = [
-        proposal.customerName,
+        `Prepared for ${proposal.customerName}`,
         proposal.contactFirst || proposal.contactLast
           ? `Contact: ${proposal.contactFirst || ""} ${proposal.contactLast || ""}`.trim()
           : null,
@@ -190,9 +335,9 @@ export default function ProposalDetailPage() {
       ]
         .filter(Boolean)
         .join("  |  ");
-      writeText(infoLine, 9, { color: [107, 114, 128], spacing: 8 });
+      writeText(infoLine, 9, { color: [107, 114, 128], spacingAfter: 8 });
 
-      // Divider line
+      // Divider
       checkPageBreak(12);
       doc.setDrawColor(229, 231, 235);
       doc.setLineWidth(0.5);
@@ -203,28 +348,14 @@ export default function ProposalDetailPage() {
       if (secs.length > 0) {
         for (const section of secs) {
           checkPageBreak(40);
-
-          // Section heading
           if (section.heading) {
-            writeText(section.heading, 14, { bold: true, spacing: 8 });
+            writeText(section.heading, 14, { bold: true, spacingAfter: 8 });
           }
-
-          // Section content
-          const text = stripHtml(section.content);
-          const paragraphs = text.split("\n").filter((p) => p.trim());
-          for (const para of paragraphs) {
-            const trimmed = para.trim();
-            if (trimmed.startsWith("\u2022")) {
-              writeText(trimmed, 10, { spacing: 3 });
-            } else {
-              writeText(trimmed, 10, { spacing: 5 });
-            }
-          }
-          y += 10;
+          processHtmlContent(section.content);
+          y += 8;
         }
       } else if (proposal.generatedHtml) {
-        const text = stripHtml(proposal.generatedHtml);
-        writeText(text, 10);
+        processHtmlContent(proposal.generatedHtml);
       }
 
       const filename = `${proposal.customerName.replace(/[^a-zA-Z0-9]/g, "_")}_Proposal.pdf`;

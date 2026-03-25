@@ -160,10 +160,14 @@ export default function TemplatesPage() {
         let docxStyles = undefined;
         if (ext === "docx") {
           try {
+            console.log("[upload] Starting DOCX style extraction...");
             setUploadStatus(`Extracting formatting from ${file.name}...`);
-            docxStyles = await extractDocxStyles(arrayBuffer);
+            // Copy the buffer in case mammoth consumed/detached the original
+            const styleBuf = arrayBuffer.slice(0);
+            docxStyles = await extractDocxStyles(styleBuf);
+            console.log("[upload] Extracted styles:", docxStyles);
           } catch (err) {
-            console.error("Style extraction failed, continuing without styles:", err);
+            console.error("[upload] Style extraction failed:", err);
           }
         }
 

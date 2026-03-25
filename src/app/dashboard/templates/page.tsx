@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useEffect, useState, useCallback } from "react";
+import mammoth from "mammoth";
+import * as pdfjsLib from "pdfjs-dist";
 import {
   Plus,
   FileText,
@@ -46,6 +48,7 @@ export default function TemplatesPage() {
   const [creating, setCreating] = useState(false);
   const [uploading, setUploading] = useState<string | null>(null);
   const [uploadStatus, setUploadStatus] = useState<string>("");
+  const [uploadError, setUploadError] = useState<string>("");
   const [dragOver, setDragOver] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
 
@@ -88,31 +91,93 @@ export default function TemplatesPage() {
     }
   };
 
+  const extractText = async (file: File): Promise<string> => {
+    const ext = file.name.toLowerCase().split(".").pop();
+    const arrayBuffer = await file.arrayBuffer();
+
+    if (ext === "docx") {
+      const result = await mammoth.extractRawText({
+        arrayBuffer,
+      });
+      return result.value;
+    }
+
+    if (ext === "pdf") {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      const pages: string[] = [];
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        const text = content.items
+          .map((item: any) => item.str)
+          .join(" ");
+        pages.push(text);
+      }
+      return pages.join("\n\n");
+    }
+
+    if (ext === "txt" || file.type.startsWith("text/")) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(new Error("Failed to read file"));
+        reader.readAsText(file);
+      });
+    }
+
+    throw new Error(`Unsupported file type: .${ext}`);
+  };
+
   const uploadFiles = async (templateId: string, files: FileList | File[]) => {
     setUploading(templateId);
+    setUploadError("");
     try {
       const fileArray = Array.from(files);
       for (let i = 0; i < fileArray.length; i++) {
         const file = fileArray[i];
-        setUploadStatus(`Uploading ${file.name}...`);
-        const formData = new FormData();
-        formData.append("file", file);
-        formData.append("templateId", templateId);
+
+        setUploadStatus(`Extracting text from ${file.name}...`);
+        let contentText: string;
+        try {
+          contentText = await extractText(file);
+        } catch (err: any) {
+          setUploadError(
+            err.message || `Could not extract text from "${file.name}".`
+          );
+          continue;
+        }
+
+        if (!contentText.trim()) {
+          setUploadError(
+            `No text could be extracted from "${file.name}". Try uploading as .txt or .docx.`
+          );
+          continue;
+        }
+
         setUploadStatus(
-          `Uploading and analyzing ${file.name}... This may take a moment.`
+          `Analyzing ${file.name}... This may take a moment.`
         );
         const res = await fetch("/api/upload", {
           method: "POST",
-          body: formData,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            templateId,
+            filename: file.name,
+            contentText,
+            fileSize: file.size,
+            mimeType: file.type || "application/octet-stream",
+          }),
         });
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
-          console.error("Upload failed:", data.error || res.statusText);
+          setUploadError(data.error || `Failed to process "${file.name}".`);
         }
       }
       await fetchTemplates();
     } catch (error) {
       console.error("Failed to upload files:", error);
+      setUploadError("Upload failed. Please try again.");
     } finally {
       setUploading(null);
       setUploadStatus("");
@@ -346,7 +411,7 @@ export default function TemplatesPage() {
                           id={`file-input-${template.id}`}
                           className="hidden"
                           multiple
-                          accept=".docx,.pdf,.txt,.doc"
+                          accept=".docx,.pdf,.txt"
                           onChange={(e) => handleFileInput(e, template.id)}
                         />
                         {uploading === template.id ? (
@@ -369,6 +434,14 @@ export default function TemplatesPage() {
                         )}
                       </div>
                     </div>
+
+                    {/* Upload Error */}
+                    {uploadError && (
+                      <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex items-start gap-2">
+                        <AlertCircle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
+                        <p className="text-sm text-red-700">{uploadError}</p>
+                      </div>
+                    )}
 
                     {/* Uploaded Files */}
                     {template.uploads && template.uploads.length > 0 && (

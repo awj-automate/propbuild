@@ -53,7 +53,7 @@ export default function SettingsPage() {
 
       if (res.ok) {
         setKeySuccess(true);
-        setMaskedKey(`${"*".repeat(40)}${apiKey.trim().slice(-4)}`);
+        setMaskedKey(apiKey.trim().slice(-4));
         setApiKey("");
         setTimeout(() => setKeySuccess(false), 3000);
       } else {
@@ -127,10 +127,10 @@ export default function SettingsPage() {
 
             {maskedKey && !apiKey && (
               <div className="flex items-center justify-between px-3 py-2.5 bg-gray-50 rounded-lg">
-                <div className="flex items-center gap-2">
-                  <Shield className="h-4 w-4 text-[#4A7C6F]" />
-                  <span className="text-sm text-[#6B7280] font-mono">
-                    {maskedKey}
+                <div className="flex items-center gap-2 min-w-0">
+                  <Shield className="h-4 w-4 text-[#4A7C6F] shrink-0" />
+                  <span className="text-sm text-[#6B7280] font-mono truncate">
+                    {"••••••••••••" + maskedKey.slice(-4)}
                   </span>
                 </div>
                 <button

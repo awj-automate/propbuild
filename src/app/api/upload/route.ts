@@ -3,70 +3,9 @@ import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import { createAnthropicClient, ANALYZE_PROMPT } from "@/lib/anthropic"
-import mammoth from "mammoth"
 
-async function extractTextFromFile(
-  buffer: Buffer,
-  filename: string,
-  mimeType: string
-): Promise<string> {
-  const ext = filename.toLowerCase().split(".").pop()
-
-  if (ext === "docx") {
-    const result = await mammoth.extractRawText({ buffer })
-    return result.value
-  }
-
-  if (ext === "pdf") {
-    // Simple PDF text extraction: find text between stream markers
-    // and extract readable ASCII content
-    const text = buffer.toString("latin1")
-    const extracted: string[] = []
-
-    // Try to extract text from PDF streams
-    const streamRegex = /stream\r?\n([\s\S]*?)\r?\nendstream/g
-    let match
-    while ((match = streamRegex.exec(text)) !== null) {
-      const streamContent = match[1]
-      // Extract text shown with Tj or TJ operators
-      const tjRegex = /\(([^)]*)\)\s*Tj/g
-      let tjMatch
-      while ((tjMatch = tjRegex.exec(streamContent)) !== null) {
-        extracted.push(tjMatch[1])
-      }
-      // Extract text from TJ arrays
-      const tjArrayRegex = /\[([^\]]*)\]\s*TJ/g
-      let tjArrayMatch
-      while ((tjArrayMatch = tjArrayRegex.exec(streamContent)) !== null) {
-        const items = tjArrayMatch[1]
-        const textParts = items.match(/\(([^)]*)\)/g)
-        if (textParts) {
-          extracted.push(textParts.map((p) => p.slice(1, -1)).join(""))
-        }
-      }
-    }
-
-    // If stream extraction found text, use it
-    if (extracted.length > 0) {
-      return extracted.join("\n")
-    }
-
-    // Fallback: extract any readable text content
-    const readableText = buffer
-      .toString("utf8")
-      .replace(/[^\x20-\x7E\n\r\t]/g, " ")
-      .replace(/\s{3,}/g, "\n")
-      .trim()
-
-    return readableText || "Could not extract text from PDF. Please upload as .docx or .txt."
-  }
-
-  if (ext === "txt" || mimeType.startsWith("text/")) {
-    return buffer.toString("utf8")
-  }
-
-  throw new Error(`Unsupported file type: .${ext}`)
-}
+export const runtime = "nodejs"
+export const maxDuration = 60
 
 export async function POST(req: NextRequest) {
   try {
@@ -77,17 +16,12 @@ export async function POST(req: NextRequest) {
 
     const userId = (session.user as any).id
 
-    const formData = await req.formData()
-    const file = formData.get("file") as File | null
-    const templateId = formData.get("templateId") as string | null
+    const body = await req.json()
+    const { templateId, filename, contentText, fileSize, mimeType } = body
 
-    if (!file) {
-      return NextResponse.json({ error: "No file provided" }, { status: 400 })
-    }
-
-    if (!templateId) {
+    if (!templateId || !filename || !contentText) {
       return NextResponse.json(
-        { error: "templateId is required" },
+        { error: "templateId, filename, and contentText are required" },
         { status: 400 }
       )
     }
@@ -104,24 +38,15 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Extract text from file
-    const arrayBuffer = await file.arrayBuffer()
-    const buffer = Buffer.from(arrayBuffer)
-    const contentText = await extractTextFromFile(
-      buffer,
-      file.name,
-      file.type
-    )
-
     // Save upload record
     const upload = await prisma.upload.create({
       data: {
         userId,
         templateId,
-        filename: file.name,
+        filename,
         contentText,
-        fileSize: file.size,
-        mimeType: file.type || "application/octet-stream",
+        fileSize: fileSize || 0,
+        mimeType: mimeType || "application/octet-stream",
       },
     })
 

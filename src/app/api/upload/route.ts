@@ -52,6 +52,7 @@ export async function POST(req: NextRequest) {
 
     // Save extracted DOCX styles to template if provided
     if (docxStyles && typeof docxStyles === "object") {
+      console.log("[upload] Saving DOCX styles to template:", JSON.stringify(docxStyles))
       await prisma.template.update({
         where: { id: templateId },
         data: { styles: JSON.stringify(docxStyles) },

@@ -294,10 +294,13 @@ export async function POST(
     }
 
     if (format === "docx") {
+      console.log("[export] Raw template styles:", proposal.template?.styles)
       const s = parseStyles(proposal.template?.styles)
+      console.log("[export] Parsed styles:", JSON.stringify(s))
       const headingFont = s.headingFont || s.bodyFont || undefined
       const headingColor = s.headingColor || undefined
       const bodyFont = s.bodyFont || undefined
+      console.log("[export] Using fonts:", { headingFont, bodyFont, headingColor })
 
       let docParagraphs: Paragraph[] = []
 

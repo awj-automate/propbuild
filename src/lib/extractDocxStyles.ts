@@ -4,36 +4,45 @@ import { TemplateStyles, DEFAULT_STYLES } from "./templateStyles"
 const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 const A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
 
-function getElementByNS(
-  parent: Element | Document,
-  ns: string,
-  localName: string
-): Element | null {
+// Get attribute value trying multiple access methods for cross-browser compat
+function getAttr(el: Element, name: string, ns?: string): string | null {
+  // Try namespace-aware access first
+  if (ns) {
+    const val = el.getAttributeNS(ns, name)
+    if (val) return val
+  }
+  // Try prefixed form (e.g. "w:val")
+  const prefix = ns === W_NS ? "w:" : ns === A_NS ? "a:" : ""
+  if (prefix) {
+    const val = el.getAttribute(prefix + name)
+    if (val) return val
+  }
+  // Try unprefixed
+  const val = el.getAttribute(name)
+  if (val) return val
+  return null
+}
+
+function getElementByNS(parent: Element | Document, ns: string, localName: string): Element | null {
   const els = parent.getElementsByTagNameNS(ns, localName)
   return els.length > 0 ? els[0] : null
 }
 
-function getAllByNS(
-  parent: Element | Document,
-  ns: string,
-  localName: string
-): Element[] {
+function getAllByNS(parent: Element | Document, ns: string, localName: string): Element[] {
   return Array.from(parent.getElementsByTagNameNS(ns, localName))
 }
 
 function extractColorFromElement(el: Element | null): string | null {
   if (!el) return null
-  // Check for <a:srgbClr val="XXXXXX"/> child
   const srgb = getElementByNS(el, A_NS, "srgbClr")
   if (srgb) {
-    const val = srgb.getAttribute("val")
-    if (val && val.length === 6) return val
+    const val = getAttr(srgb, "val") || getAttr(srgb, "val", A_NS)
+    if (val && /^[0-9A-Fa-f]{6}$/.test(val)) return val.toUpperCase()
   }
-  // Check for <a:sysClr lastClr="XXXXXX"/> child
   const sys = getElementByNS(el, A_NS, "sysClr")
   if (sys) {
-    const lastClr = sys.getAttribute("lastClr")
-    if (lastClr && lastClr.length === 6) return lastClr
+    const lastClr = getAttr(sys, "lastClr") || getAttr(sys, "lastClr", A_NS)
+    if (lastClr && /^[0-9A-Fa-f]{6}$/.test(lastClr)) return lastClr.toUpperCase()
   }
   return null
 }
@@ -48,23 +57,21 @@ function parseThemeXml(xml: string): ThemeData {
   const parser = new DOMParser()
   const doc = parser.parseFromString(xml, "application/xml")
 
-  // Extract fonts
   let headingFont: string | null = null
   let bodyFont: string | null = null
 
   const majorFont = getElementByNS(doc, A_NS, "majorFont")
   if (majorFont) {
     const latin = getElementByNS(majorFont, A_NS, "latin")
-    if (latin) headingFont = latin.getAttribute("typeface")
+    if (latin) headingFont = getAttr(latin, "typeface")
   }
 
   const minorFont = getElementByNS(doc, A_NS, "minorFont")
   if (minorFont) {
     const latin = getElementByNS(minorFont, A_NS, "latin")
-    if (latin) bodyFont = latin.getAttribute("typeface")
+    if (latin) bodyFont = getAttr(latin, "typeface")
   }
 
-  // Extract theme colors
   const colorMap: Record<string, string> = {}
   const colorScheme = getElementByNS(doc, A_NS, "clrScheme")
   if (colorScheme) {
@@ -79,6 +86,9 @@ function parseThemeXml(xml: string): ThemeData {
       if (color) colorMap[name] = color
     }
   }
+
+  console.log("[extractDocxStyles] Theme fonts:", { headingFont, bodyFont })
+  console.log("[extractDocxStyles] Theme colors:", colorMap)
 
   return { headingFont, bodyFont, colorMap }
 }
@@ -96,59 +106,62 @@ function parseStylesXml(xml: string, themeColors: Record<string, string>): Style
   const parser = new DOMParser()
   const doc = parser.parseFromString(xml, "application/xml")
 
+  // Build style map using multiple attribute access strategies
   const styleMap: Record<string, Element> = {}
   const styles = getAllByNS(doc, W_NS, "style")
   for (const style of styles) {
-    const id = style.getAttribute("w:styleId")
+    const id = getAttr(style, "styleId", W_NS) || getAttr(style, "styleId")
     if (id) styleMap[id] = style
   }
+
+  console.log("[extractDocxStyles] Found style IDs:", Object.keys(styleMap))
 
   function getSizeFromStyle(styleId: string): number | null {
     const style = styleMap[styleId]
     if (!style) return null
-    const rPr = getElementByNS(style, W_NS, "rPr")
-    if (!rPr) return null
-    const sz = getElementByNS(rPr, W_NS, "sz")
-    if (!sz) return null
-    const val = sz.getAttribute("w:val")
-    return val ? parseInt(val, 10) : null
+    // Search for sz element anywhere in the style (not just direct rPr child)
+    const szElements = getAllByNS(style, W_NS, "sz")
+    for (const sz of szElements) {
+      const val = getAttr(sz, "val", W_NS) || getAttr(sz, "val")
+      if (val) {
+        const num = parseInt(val, 10)
+        if (!isNaN(num) && num > 0) return num
+      }
+    }
+    return null
   }
 
   function getColorFromStyle(styleId: string): string | null {
     const style = styleMap[styleId]
     if (!style) return null
-    const rPr = getElementByNS(style, W_NS, "rPr")
-    if (!rPr) return null
-    const color = getElementByNS(rPr, W_NS, "color")
-    if (!color) return null
+    const colorElements = getAllByNS(style, W_NS, "color")
+    for (const color of colorElements) {
+      // Direct hex color
+      const val = getAttr(color, "val", W_NS) || getAttr(color, "val")
+      if (val && val !== "auto" && /^[0-9A-Fa-f]{6}$/.test(val)) return val.toUpperCase()
 
-    // Direct hex color
-    const val = color.getAttribute("w:val")
-    if (val && val !== "auto" && val.length === 6) return val
-
-    // Theme color reference
-    const themeColor = color.getAttribute("w:themeColor")
-    if (themeColor && themeColors[themeColor]) return themeColors[themeColor]
-
+      // Theme color reference
+      const themeColor = getAttr(color, "themeColor", W_NS) || getAttr(color, "themeColor")
+      if (themeColor && themeColors[themeColor]) return themeColors[themeColor]
+    }
     return null
   }
 
   function getFontFromStyle(styleId: string): string | null {
     const style = styleMap[styleId]
     if (!style) return null
-    const rPr = getElementByNS(style, W_NS, "rPr")
-    if (!rPr) return null
-    const rFonts = getElementByNS(rPr, W_NS, "rFonts")
-    if (!rFonts) return null
-    return (
-      rFonts.getAttribute("w:ascii") ||
-      rFonts.getAttribute("w:hAnsi") ||
-      rFonts.getAttribute("w:cs") ||
-      null
-    )
+    const rFontsElements = getAllByNS(style, W_NS, "rFonts")
+    for (const rFonts of rFontsElements) {
+      const font =
+        getAttr(rFonts, "ascii", W_NS) || getAttr(rFonts, "ascii") ||
+        getAttr(rFonts, "hAnsi", W_NS) || getAttr(rFonts, "hAnsi") ||
+        getAttr(rFonts, "cs", W_NS) || getAttr(rFonts, "cs")
+      if (font) return font
+    }
+    return null
   }
 
-  return {
+  const result: StyleInfo = {
     headingColor:
       getColorFromStyle("Heading1") ||
       getColorFromStyle("Heading2") ||
@@ -168,6 +181,26 @@ function parseStylesXml(xml: string, themeColors: Record<string, string>): Style
       getFontFromStyle("Title") ||
       null,
   }
+
+  console.log("[extractDocxStyles] Style info:", result)
+
+  return result
+}
+
+// Find a file in the zip case-insensitively
+function findFile(zip: JSZip, path: string): JSZip.JSZipObject | null {
+  // Try exact path first
+  const exact = zip.file(path)
+  if (exact) return exact
+  // Try case-insensitive
+  const lowerPath = path.toLowerCase()
+  let found: JSZip.JSZipObject | null = null
+  zip.forEach((relativePath, file) => {
+    if (relativePath.toLowerCase() === lowerPath && !found) {
+      found = file
+    }
+  })
+  return found
 }
 
 export async function extractDocxStyles(
@@ -176,15 +209,24 @@ export async function extractDocxStyles(
   try {
     const zip = await JSZip.loadAsync(arrayBuffer)
 
-    // Parse theme
+    // List files for debugging
+    const files: string[] = []
+    zip.forEach((path) => files.push(path))
+    console.log("[extractDocxStyles] ZIP files:", files.filter(f =>
+      f.toLowerCase().includes("theme") || f.toLowerCase().includes("style")
+    ))
+
+    // Parse theme (case-insensitive file lookup)
     let theme: ThemeData = { headingFont: null, bodyFont: null, colorMap: {} }
-    const themeFile = zip.file("word/theme/theme1.xml")
+    const themeFile = findFile(zip, "word/theme/theme1.xml")
     if (themeFile) {
       const themeXml = await themeFile.async("text")
       theme = parseThemeXml(themeXml)
+    } else {
+      console.warn("[extractDocxStyles] No theme file found")
     }
 
-    // Parse styles
+    // Parse styles (case-insensitive file lookup)
     let styleInfo: StyleInfo = {
       headingColor: null,
       bodyColor: null,
@@ -193,13 +235,15 @@ export async function extractDocxStyles(
       bodyFontOverride: null,
       headingFontOverride: null,
     }
-    const stylesFile = zip.file("word/styles.xml")
+    const stylesFile = findFile(zip, "word/styles.xml")
     if (stylesFile) {
       const stylesXml = await stylesFile.async("text")
       styleInfo = parseStylesXml(stylesXml, theme.colorMap)
+    } else {
+      console.warn("[extractDocxStyles] No styles file found")
     }
 
-    // Resolve fonts: style overrides take priority over theme
+    // Resolve fonts: style-level overrides take priority over theme fonts
     const headingFont = styleInfo.headingFontOverride || theme.headingFont
     const bodyFont = styleInfo.bodyFontOverride || theme.bodyFont
 
@@ -210,34 +254,29 @@ export async function extractDocxStyles(
       if (c) accentColors.push(c)
     }
 
-    // Resolve heading color
-    const headingColor =
-      styleInfo.headingColor || theme.colorMap.accent1 || null
+    const headingColor = styleInfo.headingColor || theme.colorMap.accent1 || null
+    const bodyColor = styleInfo.bodyColor || theme.colorMap.dk1 || null
 
-    // Resolve body color
-    const bodyColor =
-      styleInfo.bodyColor || theme.colorMap.dk1 || null
-
-    return {
+    const result: TemplateStyles = {
       headingFont,
       bodyFont,
       headingColor,
       bodyColor,
       accentColors,
       headingSizes: {
-        title:
-          styleInfo.headingSizes.Title || DEFAULT_STYLES.headingSizes.title,
-        h1:
-          styleInfo.headingSizes.Heading1 || DEFAULT_STYLES.headingSizes.h1,
-        h2:
-          styleInfo.headingSizes.Heading2 || DEFAULT_STYLES.headingSizes.h2,
-        h3:
-          styleInfo.headingSizes.Heading3 || DEFAULT_STYLES.headingSizes.h3,
+        title: styleInfo.headingSizes.Title || DEFAULT_STYLES.headingSizes.title,
+        h1: styleInfo.headingSizes.Heading1 || DEFAULT_STYLES.headingSizes.h1,
+        h2: styleInfo.headingSizes.Heading2 || DEFAULT_STYLES.headingSizes.h2,
+        h3: styleInfo.headingSizes.Heading3 || DEFAULT_STYLES.headingSizes.h3,
         body: styleInfo.bodySize || DEFAULT_STYLES.headingSizes.body,
       },
     }
+
+    console.log("[extractDocxStyles] Final result:", result)
+
+    return result
   } catch (error) {
-    console.error("Failed to extract DOCX styles:", error)
+    console.error("[extractDocxStyles] Failed:", error)
     return { ...DEFAULT_STYLES }
   }
 }

@@ -158,17 +158,19 @@ export default function TemplatesPage() {
 
         // Extract formatting styles from DOCX files
         let docxStyles = undefined;
-        console.warn("[upload] File:", file.name, "ext:", ext, "type:", file.type);
+        window.alert("DEBUG: ext=" + ext + " file=" + file.name);
         if (ext === "docx") {
           try {
-            console.warn("[upload] Starting DOCX style extraction...");
             setUploadStatus(`Extracting formatting from ${file.name}...`);
-            // Copy the buffer in case mammoth consumed/detached the original
             const styleBuf = arrayBuffer.slice(0);
             docxStyles = await extractDocxStyles(styleBuf);
-            console.warn("[upload] Extracted styles:", docxStyles);
-          } catch (err) {
-            console.warn("[upload-err] Style extraction failed:", err);
+            window.alert("DEBUG styles: " + JSON.stringify({
+              bodyFont: docxStyles?.bodyFont,
+              headingFont: docxStyles?.headingFont,
+              headingColor: docxStyles?.headingColor,
+            }));
+          } catch (err: any) {
+            window.alert("DEBUG style error: " + (err?.message || err));
           }
         }
 

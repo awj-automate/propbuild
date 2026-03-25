@@ -139,9 +139,9 @@ export async function POST(
 
     const { format } = await req.json()
 
-    if (!format || !["pdf", "docx", "gdoc"].includes(format)) {
+    if (!format || !["pdf", "docx"].includes(format)) {
       return NextResponse.json(
-        { error: "Invalid format. Use 'pdf', 'docx', or 'gdoc'." },
+        { error: "Invalid format. Use 'pdf' or 'docx'." },
         { status: 400 }
       )
     }
@@ -239,17 +239,6 @@ export async function POST(
           : null,
         customerName: proposal.customerName,
       })
-    }
-
-    if (format === "gdoc") {
-      return NextResponse.json(
-        {
-          message:
-            "Google Docs export requires OAuth setup. This feature is coming soon.",
-          proposalId: proposal.id,
-        },
-        { status: 501 }
-      )
     }
 
     return NextResponse.json({ error: "Unknown format" }, { status: 400 })

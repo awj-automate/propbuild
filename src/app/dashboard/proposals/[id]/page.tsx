@@ -6,7 +6,6 @@ import Link from "next/link";
 import {
   Download,
   FileText,
-  Printer,
   RefreshCw,
   Trash2,
   ArrowLeft,
@@ -80,9 +79,11 @@ export default function ProposalDetailPage() {
   const exportToWord = async () => {
     setExporting("docx");
     try {
-      const res = await fetch(
-        `/api/proposals/${proposalId}/export?format=docx`
-      );
+      const res = await fetch(`/api/proposals/${proposalId}/export`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ format: "docx" }),
+      });
       if (res.ok) {
         const blob = await res.blob();
         const url = window.URL.createObjectURL(blob);
@@ -101,8 +102,138 @@ export default function ProposalDetailPage() {
     }
   };
 
-  const exportToPdf = () => {
-    window.print();
+  const exportToPdf = async () => {
+    if (!proposal) return;
+    setExporting("pdf");
+    try {
+      const { jsPDF } = await import("jspdf");
+      const doc = new jsPDF({ unit: "pt", format: "letter" });
+
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      const marginLeft = 56;
+      const marginRight = 56;
+      const maxWidth = pageWidth - marginLeft - marginRight;
+      let y = 56;
+
+      const checkPageBreak = (needed: number) => {
+        if (y + needed > pageHeight - 56) {
+          doc.addPage();
+          y = 56;
+        }
+      };
+
+      const stripHtml = (html: string): string => {
+        return html
+          .replace(/<br\s*\/?>/gi, "\n")
+          .replace(/<\/?(p|div|section)[^>]*>/gi, "\n")
+          .replace(/<\/?(ul|ol)[^>]*>/gi, "\n")
+          .replace(/<li[^>]*>(.*?)<\/li>/gi, "  \u2022 $1\n")
+          .replace(/<h[1-6][^>]*>(.*?)<\/h[1-6]>/gi, "\n$1\n")
+          .replace(/<[^>]+>/g, "")
+          .replace(/&amp;/g, "&")
+          .replace(/&lt;/g, "<")
+          .replace(/&gt;/g, ">")
+          .replace(/&nbsp;/g, " ")
+          .replace(/&quot;/g, '"')
+          .replace(/&#39;/g, "'")
+          .replace(/\n{3,}/g, "\n\n")
+          .trim();
+      };
+
+      const writeText = (
+        text: string,
+        fontSize: number,
+        options?: { bold?: boolean; color?: [number, number, number]; spacing?: number }
+      ) => {
+        const { bold, color, spacing } = options || {};
+        doc.setFontSize(fontSize);
+        doc.setFont("helvetica", bold ? "bold" : "normal");
+        if (color) doc.setTextColor(...color);
+        else doc.setTextColor(17, 24, 39);
+
+        const lines = doc.splitTextToSize(text, maxWidth) as string[];
+        const lineHeight = fontSize * 1.4;
+
+        for (const line of lines) {
+          checkPageBreak(lineHeight);
+          doc.text(line, marginLeft, y);
+          y += lineHeight;
+        }
+        y += spacing ?? 4;
+      };
+
+      // Parse sections
+      const secs = getSections();
+      let title = proposal.customerName + " - Proposal";
+      if (proposal.generatedJson) {
+        try {
+          const parsed = JSON.parse(proposal.generatedJson);
+          if (parsed.title) title = parsed.title;
+        } catch {}
+      }
+
+      // Title
+      writeText(title, 22, { bold: true, color: [74, 124, 111], spacing: 20 });
+
+      // Customer info line
+      const infoLine = [
+        proposal.customerName,
+        proposal.contactFirst || proposal.contactLast
+          ? `Contact: ${proposal.contactFirst || ""} ${proposal.contactLast || ""}`.trim()
+          : null,
+        new Date(proposal.createdAt).toLocaleDateString("en-US", {
+          month: "long",
+          day: "numeric",
+          year: "numeric",
+        }),
+      ]
+        .filter(Boolean)
+        .join("  |  ");
+      writeText(infoLine, 9, { color: [107, 114, 128], spacing: 8 });
+
+      // Divider line
+      checkPageBreak(12);
+      doc.setDrawColor(229, 231, 235);
+      doc.setLineWidth(0.5);
+      doc.line(marginLeft, y, pageWidth - marginRight, y);
+      y += 16;
+
+      // Sections
+      if (secs.length > 0) {
+        for (const section of secs) {
+          checkPageBreak(40);
+
+          // Section heading
+          if (section.heading) {
+            writeText(section.heading, 14, { bold: true, spacing: 8 });
+          }
+
+          // Section content
+          const text = stripHtml(section.content);
+          const paragraphs = text.split("\n").filter((p) => p.trim());
+          for (const para of paragraphs) {
+            const trimmed = para.trim();
+            if (trimmed.startsWith("\u2022")) {
+              writeText(trimmed, 10, { spacing: 3 });
+            } else {
+              writeText(trimmed, 10, { spacing: 5 });
+            }
+          }
+          y += 10;
+        }
+      } else if (proposal.generatedHtml) {
+        const text = stripHtml(proposal.generatedHtml);
+        writeText(text, 10);
+      }
+
+      const filename = `${proposal.customerName.replace(/[^a-zA-Z0-9]/g, "_")}_Proposal.pdf`;
+      doc.save(filename);
+    } catch (error) {
+      console.error("PDF export failed:", error);
+    } finally {
+      setExporting(null);
+    }
   };
 
 
@@ -227,8 +358,13 @@ export default function ProposalDetailPage() {
           <Download className="h-3.5 w-3.5" />
           Export to Word
         </Button>
-        <Button variant="secondary" size="sm" onClick={exportToPdf}>
-          <Printer className="h-3.5 w-3.5" />
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={exportToPdf}
+          loading={exporting === "pdf"}
+        >
+          <Download className="h-3.5 w-3.5" />
           Export to PDF
         </Button>
 
@@ -306,23 +442,6 @@ export default function ProposalDetailPage() {
         )}
       </div>
 
-      {/* Print Styles */}
-      <style jsx global>{`
-        @media print {
-          aside,
-          nav,
-          .no-print {
-            display: none !important;
-          }
-          main {
-            margin: 0 !important;
-            padding: 0 !important;
-          }
-          body {
-            background: white !important;
-          }
-        }
-      `}</style>
     </div>
   );
 }

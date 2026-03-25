@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
     const userId = (session.user as any).id
 
     const body = await req.json()
-    const { templateId, filename, contentText, fileSize, mimeType } = body
+    const { templateId, filename, contentText, fileSize, mimeType, docxStyles } = body
 
     if (!templateId || !filename || !contentText) {
       return NextResponse.json(
@@ -49,6 +49,14 @@ export async function POST(req: NextRequest) {
         mimeType: mimeType || "application/octet-stream",
       },
     })
+
+    // Save extracted DOCX styles to template if provided
+    if (docxStyles && typeof docxStyles === "object") {
+      await prisma.template.update({
+        where: { id: templateId },
+        data: { styles: JSON.stringify(docxStyles) },
+      })
+    }
 
     // Get user's Anthropic API key
     const user = await prisma.user.findUnique({

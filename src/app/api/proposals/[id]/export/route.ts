@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
+import { parseStyles, TemplateStyles } from "@/lib/templateStyles"
 import { parse as parseHtml, HTMLElement, TextNode } from "node-html-parser"
 import {
   Document,
@@ -59,9 +60,25 @@ function extractInlineRuns(
   return runs
 }
 
-function htmlToDocxParagraphs(html: string): Paragraph[] {
+function makeRun(run: InlineRun, s: TemplateStyles, isHeading = false): TextRun {
+  return new TextRun({
+    text: run.text,
+    bold: run.bold,
+    italics: run.italic,
+    size: isHeading ? s.headingSizes.body : s.headingSizes.body,
+    font: isHeading ? (s.headingFont || s.bodyFont || undefined) : (s.bodyFont || undefined),
+    color: isHeading ? (s.headingColor || s.bodyColor || undefined) : (s.bodyColor || undefined),
+  })
+}
+
+function htmlToDocxParagraphs(html: string, s: TemplateStyles): Paragraph[] {
   const root = parseHtml(html, { blockTextElements: {} })
   const paragraphs: Paragraph[] = []
+
+  const bodyFont = s.bodyFont || undefined
+  const bodyColor = s.bodyColor || undefined
+  const headingFont = s.headingFont || s.bodyFont || undefined
+  const headingColor = s.headingColor || undefined
 
   function processNode(node: HTMLElement | TextNode) {
     if (node instanceof TextNode) {
@@ -70,7 +87,7 @@ function htmlToDocxParagraphs(html: string): Paragraph[] {
         paragraphs.push(
           new Paragraph({
             spacing: { after: 120 },
-            children: [new TextRun({ text, size: 22 })],
+            children: [new TextRun({ text, size: s.headingSizes.body, font: bodyFont, color: bodyColor })],
           })
         )
       }
@@ -87,7 +104,7 @@ function htmlToDocxParagraphs(html: string): Paragraph[] {
           new Paragraph({
             heading: HeadingLevel.HEADING_1,
             spacing: { before: 240, after: 120 },
-            children: [new TextRun({ text, bold: true, size: 32 })],
+            children: [new TextRun({ text, bold: true, size: s.headingSizes.h1, font: headingFont, color: headingColor })],
           })
         )
       }
@@ -101,7 +118,7 @@ function htmlToDocxParagraphs(html: string): Paragraph[] {
           new Paragraph({
             heading: HeadingLevel.HEADING_2,
             spacing: { before: 200, after: 100 },
-            children: [new TextRun({ text, bold: true, size: 28 })],
+            children: [new TextRun({ text, bold: true, size: s.headingSizes.h2, font: headingFont, color: headingColor })],
           })
         )
       }
@@ -115,7 +132,7 @@ function htmlToDocxParagraphs(html: string): Paragraph[] {
           new Paragraph({
             heading: HeadingLevel.HEADING_3,
             spacing: { before: 160, after: 80 },
-            children: [new TextRun({ text, bold: true, size: 24 })],
+            children: [new TextRun({ text, bold: true, size: s.headingSizes.h3, font: headingFont, color: headingColor })],
           })
         )
       }
@@ -128,15 +145,7 @@ function htmlToDocxParagraphs(html: string): Paragraph[] {
         paragraphs.push(
           new Paragraph({
             spacing: { after: 120 },
-            children: runs.map(
-              (r) =>
-                new TextRun({
-                  text: r.text,
-                  bold: r.bold,
-                  italics: r.italic,
-                  size: 22,
-                })
-            ),
+            children: runs.map((r) => makeRun(r, s)),
           })
         )
       }
@@ -158,7 +167,6 @@ function htmlToDocxParagraphs(html: string): Paragraph[] {
     }
 
     if (tag === "table") {
-      // Render tables as simple text rows
       const rows = el.querySelectorAll("tr")
       for (const row of rows) {
         const cells = row.querySelectorAll("td, th")
@@ -172,7 +180,9 @@ function htmlToDocxParagraphs(html: string): Paragraph[] {
                 new TextRun({
                   text: cellTexts.join("    |    "),
                   bold: isHeader,
-                  size: 22,
+                  size: s.headingSizes.body,
+                  font: bodyFont,
+                  color: bodyColor,
                 }),
               ],
             })
@@ -187,42 +197,29 @@ function htmlToDocxParagraphs(html: string): Paragraph[] {
       return
     }
 
-    // For any other element, recurse into children
     for (const child of el.childNodes) {
       processNode(child as HTMLElement | TextNode)
     }
   }
 
   function processLi(li: HTMLElement) {
-    // Check if the li contains block elements (nested lists, headings, etc.)
     const blockTags = ["ul", "ol", "h1", "h2", "h3", "h4", "p", "div", "table"]
     const hasBlocks = blockTags.some((t) => li.querySelector(t) !== null)
 
     if (hasBlocks) {
-      // Process inline content first, then block children
       const inlineText: InlineRun[] = []
       for (const child of li.childNodes) {
         if (child instanceof TextNode) {
-          const runs = extractInlineRuns(child)
-          inlineText.push(...runs)
+          inlineText.push(...extractInlineRuns(child))
         } else if (child instanceof HTMLElement) {
           const childTag = child.tagName?.toLowerCase() || ""
           if (blockTags.includes(childTag)) {
-            // Flush inline text as a bullet point first
             if (inlineText.length > 0 && inlineText.some((r) => r.text.trim())) {
               paragraphs.push(
                 new Paragraph({
                   bullet: { level: 0 },
                   spacing: { after: 60 },
-                  children: inlineText.map(
-                    (r) =>
-                      new TextRun({
-                        text: r.text,
-                        bold: r.bold,
-                        italics: r.italic,
-                        size: 22,
-                      })
-                  ),
+                  children: inlineText.map((r) => makeRun(r, s)),
                 })
               )
               inlineText.length = 0
@@ -233,41 +230,23 @@ function htmlToDocxParagraphs(html: string): Paragraph[] {
           }
         }
       }
-      // Flush remaining inline text
       if (inlineText.length > 0 && inlineText.some((r) => r.text.trim())) {
         paragraphs.push(
           new Paragraph({
             bullet: { level: 0 },
             spacing: { after: 60 },
-            children: inlineText.map(
-              (r) =>
-                new TextRun({
-                  text: r.text,
-                  bold: r.bold,
-                  italics: r.italic,
-                  size: 22,
-                })
-            ),
+            children: inlineText.map((r) => makeRun(r, s)),
           })
         )
       }
     } else {
-      // Simple li - extract all inline runs
       const runs = extractInlineRuns(li)
       if (runs.length > 0) {
         paragraphs.push(
           new Paragraph({
             bullet: { level: 0 },
             spacing: { after: 60 },
-            children: runs.map(
-              (r) =>
-                new TextRun({
-                  text: r.text,
-                  bold: r.bold,
-                  italics: r.italic,
-                  size: 22,
-                })
-            ),
+            children: runs.map((r) => makeRun(r, s)),
           })
         )
       }
@@ -295,6 +274,7 @@ export async function POST(
 
     const proposal = await prisma.proposal.findFirst({
       where: { id: params.id, userId },
+      include: { template: { select: { styles: true } } },
     })
 
     if (!proposal) {
@@ -314,6 +294,11 @@ export async function POST(
     }
 
     if (format === "docx") {
+      const s = parseStyles(proposal.template?.styles)
+      const headingFont = s.headingFont || s.bodyFont || undefined
+      const headingColor = s.headingColor || undefined
+      const bodyFont = s.bodyFont || undefined
+
       let docParagraphs: Paragraph[] = []
 
       if (proposal.generatedJson) {
@@ -330,13 +315,15 @@ export async function POST(
                 new TextRun({
                   text: data.title || "Proposal",
                   bold: true,
-                  size: 40,
+                  size: s.headingSizes.title,
+                  font: headingFont,
+                  color: headingColor,
                 }),
               ],
             })
           )
 
-          // Subtitle with customer name
+          // Subtitle
           if (proposal.customerName) {
             docParagraphs.push(
               new Paragraph({
@@ -345,7 +332,8 @@ export async function POST(
                 children: [
                   new TextRun({
                     text: `Prepared for ${proposal.customerName}`,
-                    size: 24,
+                    size: s.headingSizes.h3,
+                    font: bodyFont,
                     color: "666666",
                   }),
                 ],
@@ -353,7 +341,7 @@ export async function POST(
             )
           }
 
-          // Add each section
+          // Sections
           if (data.sections && Array.isArray(data.sections)) {
             for (const section of data.sections) {
               if (section.heading) {
@@ -365,7 +353,9 @@ export async function POST(
                       new TextRun({
                         text: section.heading,
                         bold: true,
-                        size: 28,
+                        size: s.headingSizes.h1,
+                        font: headingFont,
+                        color: headingColor,
                       }),
                     ],
                   })
@@ -373,18 +363,17 @@ export async function POST(
               }
 
               if (section.content) {
-                const contentParagraphs = htmlToDocxParagraphs(section.content)
-                docParagraphs.push(...contentParagraphs)
+                docParagraphs.push(...htmlToDocxParagraphs(section.content, s))
               }
             }
           }
         } catch {
           if (proposal.generatedHtml) {
-            docParagraphs = htmlToDocxParagraphs(proposal.generatedHtml)
+            docParagraphs = htmlToDocxParagraphs(proposal.generatedHtml, s)
           }
         }
       } else if (proposal.generatedHtml) {
-        docParagraphs = htmlToDocxParagraphs(proposal.generatedHtml)
+        docParagraphs = htmlToDocxParagraphs(proposal.generatedHtml, s)
       }
 
       if (docParagraphs.length === 0) {

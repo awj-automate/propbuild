@@ -67,6 +67,7 @@ model Template {
   systemPrompt    String   @db.Text // AI-generated prompt based on uploaded examples
   boilerplate     String   @db.Text // identified reusable content
   structure       String   @db.Text // identified sections/format
+  styles          String?  @db.Text // JSON: extracted DOCX formatting metadata
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

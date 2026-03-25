@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import mammoth from "mammoth";
 import * as pdfjsLib from "pdfjs-dist";
+import { extractDocxStyles } from "@/lib/extractDocxStyles";
 import {
   Plus,
   FileText,
@@ -91,14 +92,11 @@ export default function TemplatesPage() {
     }
   };
 
-  const extractText = async (file: File): Promise<string> => {
+  const extractText = async (arrayBuffer: ArrayBuffer, file: File): Promise<string> => {
     const ext = file.name.toLowerCase().split(".").pop();
-    const arrayBuffer = await file.arrayBuffer();
 
     if (ext === "docx") {
-      const result = await mammoth.extractRawText({
-        arrayBuffer,
-      });
+      const result = await mammoth.extractRawText({ arrayBuffer });
       return result.value;
     }
 
@@ -136,11 +134,14 @@ export default function TemplatesPage() {
       const fileArray = Array.from(files);
       for (let i = 0; i < fileArray.length; i++) {
         const file = fileArray[i];
+        const ext = file.name.toLowerCase().split(".").pop();
 
         setUploadStatus(`Extracting text from ${file.name}...`);
+        const arrayBuffer = await file.arrayBuffer();
+
         let contentText: string;
         try {
-          contentText = await extractText(file);
+          contentText = await extractText(arrayBuffer, file);
         } catch (err: any) {
           setUploadError(
             err.message || `Could not extract text from "${file.name}".`
@@ -155,6 +156,17 @@ export default function TemplatesPage() {
           continue;
         }
 
+        // Extract formatting styles from DOCX files
+        let docxStyles = undefined;
+        if (ext === "docx") {
+          try {
+            setUploadStatus(`Extracting formatting from ${file.name}...`);
+            docxStyles = await extractDocxStyles(arrayBuffer);
+          } catch (err) {
+            console.error("Style extraction failed, continuing without styles:", err);
+          }
+        }
+
         setUploadStatus(
           `Analyzing ${file.name}... This may take a moment.`
         );
@@ -167,6 +179,7 @@ export default function TemplatesPage() {
             contentText,
             fileSize: file.size,
             mimeType: file.type || "application/octet-stream",
+            docxStyles,
           }),
         });
         if (!res.ok) {

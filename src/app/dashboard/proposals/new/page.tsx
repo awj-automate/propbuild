@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Sparkles, ImageIcon, X } from "lucide-react";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
@@ -14,8 +14,12 @@ interface Template {
 
 export default function NewProposalPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const regenerateId = searchParams.get("regenerate");
+
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loadingTemplates, setLoadingTemplates] = useState(true);
+  const [loadingPrefill, setLoadingPrefill] = useState(!!regenerateId);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
 
@@ -44,6 +48,32 @@ export default function NewProposalPage() {
     }
     fetchTemplates();
   }, []);
+
+  useEffect(() => {
+    if (!regenerateId) return;
+    async function fetchProposal() {
+      try {
+        const res = await fetch(`/api/proposals/${regenerateId}`);
+        if (res.ok) {
+          const data = await res.json();
+          setTemplateId(data.templateId || "");
+          setCustomerName(data.customerName || "");
+          setContactFirst(data.contactFirst || "");
+          setContactLast(data.contactLast || "");
+          setScope(data.scope || "");
+          setCustomization(data.customization || "");
+          if (data.logoUrl) {
+            setLogoPreview(data.logoUrl);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to fetch proposal for regeneration:", err);
+      } finally {
+        setLoadingPrefill(false);
+      }
+    }
+    fetchProposal();
+  }, [regenerateId]);
 
   const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -111,10 +141,12 @@ export default function NewProposalPage() {
     <div className="max-w-2xl">
       <div className="mb-8">
         <h1 className="text-2xl font-semibold text-[#111827]">
-          Create New Proposal
+          {regenerateId ? "Regenerate Proposal" : "Create New Proposal"}
         </h1>
         <p className="text-[#6B7280] mt-1">
-          Fill in the details and let AI generate a professional proposal.
+          {regenerateId
+            ? "Adjust the details below and regenerate."
+            : "Fill in the details and let AI generate a professional proposal."}
         </p>
       </div>
 

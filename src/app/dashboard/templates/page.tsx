@@ -45,6 +45,7 @@ export default function TemplatesPage() {
   const [newTemplateName, setNewTemplateName] = useState("");
   const [creating, setCreating] = useState(false);
   const [uploading, setUploading] = useState<string | null>(null);
+  const [uploadStatus, setUploadStatus] = useState<string>("");
   const [dragOver, setDragOver] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
 
@@ -90,20 +91,31 @@ export default function TemplatesPage() {
   const uploadFiles = async (templateId: string, files: FileList | File[]) => {
     setUploading(templateId);
     try {
-      for (const file of Array.from(files)) {
+      const fileArray = Array.from(files);
+      for (let i = 0; i < fileArray.length; i++) {
+        const file = fileArray[i];
+        setUploadStatus(`Uploading ${file.name}...`);
         const formData = new FormData();
         formData.append("file", file);
         formData.append("templateId", templateId);
-        await fetch("/api/upload", {
+        setUploadStatus(
+          `Uploading and analyzing ${file.name}... This may take a moment.`
+        );
+        const res = await fetch("/api/upload", {
           method: "POST",
           body: formData,
         });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          console.error("Upload failed:", data.error || res.statusText);
+        }
       }
       await fetchTemplates();
     } catch (error) {
       console.error("Failed to upload files:", error);
     } finally {
       setUploading(null);
+      setUploadStatus("");
     }
   };
 
@@ -341,7 +353,7 @@ export default function TemplatesPage() {
                           <div className="flex flex-col items-center gap-2">
                             <div className="h-6 w-6 border-2 border-[#4A7C6F] border-t-transparent rounded-full animate-spin" />
                             <p className="text-sm text-[#6B7280]">
-                              Uploading...
+                              {uploadStatus || "Uploading..."}
                             </p>
                           </div>
                         ) : (

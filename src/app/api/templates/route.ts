@@ -15,6 +15,16 @@ export async function GET() {
     const templates = await prisma.template.findMany({
       where: { userId },
       include: {
+        uploads: {
+          select: {
+            id: true,
+            filename: true,
+            fileSize: true,
+            mimeType: true,
+            createdAt: true,
+          },
+          orderBy: { createdAt: "desc" },
+        },
         _count: {
           select: { uploads: true },
         },
@@ -30,7 +40,8 @@ export async function GET() {
       structure: t.structure,
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,
-      uploadCount: t._count.uploads,
+      uploads: t.uploads,
+      _count: t._count,
     }))
 
     return NextResponse.json(result)

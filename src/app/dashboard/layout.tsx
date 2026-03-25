@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
@@ -27,8 +27,18 @@ export default function DashboardLayout({
 }) {
   const pathname = usePathname();
   const { data: session, status } = useSession();
+  const [hasApiKey, setHasApiKey] = useState<boolean | null>(null);
 
-  if (status === "loading") {
+  useEffect(() => {
+    if (status === "authenticated") {
+      fetch("/api/settings")
+        .then((res) => res.json())
+        .then((data) => setHasApiKey(data.hasApiKey || false))
+        .catch(() => setHasApiKey(false));
+    }
+  }, [status]);
+
+  if (status === "loading" || (status === "authenticated" && hasApiKey === null)) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-[#FAFBFC]">
         <div className="h-8 w-8 border-2 border-[#4A7C6F] border-t-transparent rounded-full animate-spin" />
@@ -41,6 +51,21 @@ export default function DashboardLayout({
       window.location.href = "/auth/signin";
     }
     return null;
+  }
+
+  // Redirect to setup if no API key (but allow access to setup and settings pages)
+  const isSetupPage = pathname === "/dashboard/setup";
+  const isSettingsPage = pathname === "/dashboard/settings";
+  if (!hasApiKey && !isSetupPage && !isSettingsPage) {
+    if (typeof window !== "undefined") {
+      window.location.href = "/dashboard/setup";
+    }
+    return null;
+  }
+
+  // Render setup page without the sidebar layout
+  if (isSetupPage) {
+    return <>{children}</>;
   }
 
   const isActive = (href: string) => {

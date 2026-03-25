@@ -7,7 +7,6 @@ import {
   Download,
   FileText,
   Printer,
-  ExternalLink,
   RefreshCw,
   Trash2,
   ArrowLeft,
@@ -106,24 +105,6 @@ export default function ProposalDetailPage() {
     window.print();
   };
 
-  const exportToGoogleDocs = async () => {
-    setExporting("gdoc");
-    try {
-      const res = await fetch(
-        `/api/proposals/${proposalId}/export?format=gdoc`
-      );
-      if (res.ok) {
-        const data = await res.json();
-        if (data.url) {
-          window.open(data.url, "_blank");
-        }
-      }
-    } catch (error) {
-      console.error("Google Docs export failed:", error);
-    } finally {
-      setExporting(null);
-    }
-  };
 
   const handleDelete = async () => {
     if (!confirm("Are you sure you want to delete this proposal?")) return;
@@ -249,15 +230,6 @@ export default function ProposalDetailPage() {
         <Button variant="secondary" size="sm" onClick={exportToPdf}>
           <Printer className="h-3.5 w-3.5" />
           Export to PDF
-        </Button>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={exportToGoogleDocs}
-          loading={exporting === "gdoc"}
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-          Export to Google Docs
         </Button>
 
         <div className="flex-1" />

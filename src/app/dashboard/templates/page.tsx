@@ -158,16 +158,17 @@ export default function TemplatesPage() {
 
         // Extract formatting styles from DOCX files
         let docxStyles = undefined;
+        console.warn("[upload] File:", file.name, "ext:", ext, "type:", file.type);
         if (ext === "docx") {
           try {
-            console.log("[upload] Starting DOCX style extraction...");
+            console.warn("[upload] Starting DOCX style extraction...");
             setUploadStatus(`Extracting formatting from ${file.name}...`);
             // Copy the buffer in case mammoth consumed/detached the original
             const styleBuf = arrayBuffer.slice(0);
             docxStyles = await extractDocxStyles(styleBuf);
-            console.log("[upload] Extracted styles:", docxStyles);
+            console.warn("[upload] Extracted styles:", docxStyles);
           } catch (err) {
-            console.error("[upload] Style extraction failed:", err);
+            console.warn("[upload-err] Style extraction failed:", err);
           }
         }
 
